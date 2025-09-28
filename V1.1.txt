@@ -1,0 +1,316 @@
+/**
+ * @OnlyCurrentDoc
+ * 版本 1.1 - 穩定審核版
+ */
+
+// 部署時，請務必使用「新增部署作業」，並將存取權設為「任何知道連結的使用者」
+
+function doGet() {
+  return HtmlService.createTemplateFromFile('index').evaluate()
+    .setTitle("余舍員工服務系統")
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// --- 核心函式 ---
+
+function checkLogin(id, pw) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("員工資料");
+  if (!sh) throw new Error("尚未設定 '員工資料' 工作表");
+  var data = sh.getDataRange().getValues();
+  var pwCol = 8; // 密碼在第9欄 (index 8)
+  var permissionCol = 7; // 權限在第8欄 (index 7)
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(id)) {
+      var storedPwHash = data[i][pwCol];
+      var inputPwHash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, pw)
+                               .map(byte => ('0' + (byte & 0xFF).toString(16)).slice(-2))
+                               .join('');
+
+      if (!storedPwHash) { // 首次登入
+        sh.getRange(i + 1, pwCol + 1).setValue(inputPwHash);
+        var profile = {
+          id: data[i][0], name: data[i][1], dept: data[i][2], title: data[i][3],
+          comp: data[i][5], vac: data[i][6], isManager: data[i][permissionCol] === '主管'
+        };
+        return { success: true, first: true, profile: profile };
+      }
+
+      if (storedPwHash === inputPwHash) { // 密碼正確
+        var profile = {
+          id: data[i][0], name: data[i][1], dept: data[i][2], title: data[i][3],
+          comp: data[i][5], vac: data[i][6], isManager: data[i][permissionCol] === '主管'
+        };
+        return { success: true, profile: profile };
+      }
+      return { success: false, msg: "密碼錯誤" };
+    }
+  }
+  return { success: false, msg: "查無此員工編號" };
+}
+
+function submitForm(sheetName, payload, profile) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var targetSheet = ss.getSheetByName(sheetName);
+  if (!targetSheet) throw new Error("找不到工作表：" + sheetName);
+
+  var headers = targetSheet.getRange(1, 1, 1, targetSheet.getLastColumn()).getValues()[0];
+  var rowData = headers.map(header => {
+    if (header === '姓名') return profile.name;
+    if (header === '員工編號') return profile.id;
+    if (header === '部門') return profile.dept;
+    if (header === '職位') return profile.title;
+    return payload[header] || "";
+  });
+  targetSheet.appendRow(rowData);
+
+  // 寫入申請紀錄
+  var recSheet = ss.getSheetByName("申請紀錄");
+  var summary = buildSummary_(sheetName, payload);
+  var applicantName = profile.name;
+  var agentName = payload['職務代理人'] || '';
+  var approvalChain = buildApprovalChain_(sheetName, applicantName, agentName);
+  var currentState = approvalChain.length > 0 ? approvalChain[0].state : '自動批准';
+  var uniqueId = 'REC-' + new Date().getTime() + '-' + Math.random().toString(36).substr(2, 9);
+
+  recSheet.appendRow([
+    uniqueId, applicantName, profile.id, profile.dept,
+    sheetName, new Date(), summary, currentState,
+    JSON.stringify(approvalChain)
+  ]);
+
+  // 發送 Email 通知
+  if (approvalChain.length > 0) {
+    var firstApprover = approvalChain[0].approver;
+    var recipientEmail = getEmployeeEmail_(firstApprover);
+    if (recipientEmail) {
+      var subject = `[待簽核] ${applicantName} 的 ${sheetName}`;
+      sendNotificationEmail_(recipientEmail, subject, applicantName, sheetName, summary);
+    }
+  }
+
+  return { status: "OK" };
+}
+
+function getMyApprovableTasks(userName) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("申請紀錄");
+  var data = sh.getDataRange().getValues();
+  var tasks = [];
+  for (var i = 1; i < data.length; i++) {
+    var chain = JSON.parse(data[i][8] || '[]');
+    var pendingStep = chain.find(step => step.status === 'pending');
+    if (pendingStep && pendingStep.approver === userName) {
+      tasks.push({
+        id: data[i][0],
+        applicant: data[i][1],
+        formType: data[i][4],
+        summary: data[i][6],
+        currentState: data[i][7]
+      });
+    }
+  }
+  return tasks;
+}
+
+function processApprovalAction(id, action, comment, approverName) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("申請紀錄");
+  var data = sh.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][0] === id) {
+      rowIndex = i;
+      break;
+    }
+  }
+
+  if (rowIndex === -1) return { status: "Error", message: "找不到該筆申請單" };
+
+  var chain = JSON.parse(data[rowIndex][8] || '[]');
+  var currentStepIndex = chain.findIndex(step => step.status === 'pending');
+  if (currentStepIndex === -1) return { status: "Error", message: "此單據已處理完成" };
+
+  var currentStep = chain[currentStepIndex];
+  if (currentStep.approver !== approverName) return { status: "Error", message: "您不是目前的簽核者" };
+
+  currentStep.status = action; // 'approve' or 'reject'
+  currentStep.timestamp = new Date();
+  currentStep.comment = comment || '';
+
+  var applicantName = data[rowIndex][1];
+  var formType = data[rowIndex][4];
+  var summary = data[rowIndex][6];
+  var applicantEmail = getEmployeeEmail_(applicantName);
+
+  if (action === 'reject') {
+    sh.getRange(rowIndex + 1, 8).setValue('已駁回');
+    if (applicantEmail) sendNotificationEmail_(applicantEmail, `[已駁回] 您的 ${formType}`, applicantName, formType, summary, `駁回原因：${comment}`);
+  } else { // approve
+    var nextStepIndex = currentStepIndex + 1;
+    if (nextStepIndex < chain.length) {
+      chain[nextStepIndex].status = 'pending';
+      var nextState = chain[nextStepIndex].state;
+      sh.getRange(rowIndex + 1, 8).setValue(nextState);
+      var nextApprover = chain[nextStepIndex].approver;
+      var nextApproverEmail = getEmployeeEmail_(nextApprover);
+      if (nextApproverEmail) sendNotificationEmail_(nextApproverEmail, `[待簽核] ${applicantName} 的 ${formType}`, applicantName, formType, summary);
+    } else {
+      sh.getRange(rowIndex + 1, 8).setValue('已批准');
+      if (applicantEmail) sendNotificationEmail_(applicantEmail, `[已批准] 您的 ${formType}`, applicantName, formType, summary);
+    }
+  }
+
+  sh.getRange(rowIndex + 1, 9).setValue(JSON.stringify(chain));
+  return { status: "OK" };
+}
+
+function queryThisMonth(id) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("申請紀錄");
+  var data = sh.getDataRange().getValues();
+  var now = new Date();
+  var y = now.getFullYear(), m = now.getMonth();
+  var out = [];
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][2]) !== String(id)) continue;
+    var ts = new Date(data[i][5]);
+    if (ts.getFullYear() === y && ts.getMonth() === m) {
+      out.push({
+        submittedAt: formatDateTime_(ts),
+        formType: data[i][4],
+        summary: data[i][6],
+        status: data[i][7]
+      });
+    }
+  }
+  return out.reverse();
+}
+
+// --- 輔助函式 ---
+
+function buildApprovalChain_(formType, applicantName, agentName) {
+  var chain = [];
+  var manager = getEmployeeManager_(applicantName);
+  var director = "營運總監"; // 假設固定
+  var chairman = "董事長"; // 假設固定
+
+  // 特殊流程：江孟庭
+  if (applicantName === '江孟庭') {
+    if (agentName) chain.push({ state: "待代理人審核", approver: agentName, status: "pending" });
+    chain.push({ state: "待陳家興審核", approver: "陳家興", status: "pending" });
+    chain.push({ state: "待營運總監審核", approver: director, status: "pending" });
+    chain.push({ state: "待董事長審核", approver: chairman, status: "pending" });
+  } else {
+    // 一般流程
+    switch (formType) {
+      case "請假申請":
+      case "特休補休申請":
+      case "調班申請":
+        if (agentName) chain.push({ state: "待代理人審核", approver: agentName, status: "pending" });
+        if (manager) chain.push({ state: "待主管審核", approver: manager, status: "pending" });
+        chain.push({ state: "待營運總監審核", approver: director, status: "pending" });
+        chain.push({ state: "待董事長審核", approver: chairman, status: "pending" });
+        break;
+      case "加班申請":
+      case "補打卡申請":
+      case "房務獎金申請":
+        if (manager) chain.push({ state: "待主管審核", approver: manager, status: "pending" });
+        break;
+    }
+  }
+
+  // 移除自己審核自己的情況
+  chain = chain.filter(step => step.approver !== applicantName);
+
+  // 設定第一個步驟為 pending
+  if (chain.length > 0) {
+    for(var i=1; i<chain.length; i++){ chain[i].status = 'queued'; }
+  }
+
+  return chain;
+}
+
+function buildSummary_(sheetName, p) {
+  try {
+    switch (sheetName) {
+      case "請假申請":
+        return `假別：${p['假別']}｜時間：${formatDateTime_(p['起始日期與時間'])} ~ ${formatDateTime_(p['結束日期與時間'])}｜事由：${p['請假事由']}｜代理人：${p['職務代理人']}`;
+      case "調班申請":
+        return `原班：${p['原班別日期']} ${p['原班別']} → 新班：${p['新班別日期']} ${p['新班別']}｜代理人：${p['職務代理人']}`;
+      case "特休補休申請":
+        return `類型：${p['申請類型']} ${p['申請時數']}H｜時間：${formatDateTime_(p['開始日期時間'])} ~ ${formatDateTime_(p['結束日期時間'])}｜代理人：${p['職務代理人']}`;
+      case "房務獎金申請":
+        return `日期：${p['掃房日期']}｜掃房/清潔/拆收 間數：${p['掃房間數']}/${p['清潔間數']}/${p['拆收間數']}`;
+      case "加班申請":
+        return `時間：${formatDateTime_(p['起始日期與時間'])} ~ ${formatDateTime_(p['結束日期與時間'])} (${p['加班時數']}H)｜處理方式：${p['加班時數處理方式']}`;
+      case "補打卡申請":
+        return `日期時間：${p['補打卡日期']} ${p['補打卡時間']}｜類型：${p['補打卡類型']}｜原因：${p['補打卡原因']}`;
+      default:
+        return JSON.stringify(p);
+    }
+  } catch (e) { return JSON.stringify(p); }
+}
+
+function getEmployeeManager_(employeeName) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("員工資料");
+  var data = sh.getDataRange().getValues();
+  var employeeDept = null;
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] === employeeName) {
+      employeeDept = data[i][2];
+      break;
+    }
+  }
+  if (!employeeDept) return null;
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][2] === employeeDept && data[i][7] === '主管') {
+      return data[i][1]; // 回傳主管姓名
+    }
+  }
+  return null;
+}
+
+function getEmployeeEmail_(name) {
+  if (!name) return null;
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("員工資料");
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] === name) {
+      return data[i][4]; // Email 在第5欄 (index 4)
+    }
+  }
+  return null;
+}
+
+function sendNotificationEmail_(recipientEmail, subject, applicantName, formType, summary, extraInfo) {
+  if (!recipientEmail) return;
+  var url = ScriptApp.getService().getUrl();
+  var htmlBody = `
+    <h2>您有一筆新的簽核通知</h2>
+    <p><b>申請人：</b> ${applicantName}</p>
+    <p><b>表單類型：</b> ${formType}</p>
+    <p><b>內容摘要：</b> ${summary}</p>
+    ${extraInfo ? `<p style="color:red;"><b>備註：</b> ${extraInfo}</p>` : ''}
+    <p>請點擊以下連結返回系統進行處理：</p>
+    <a href="${url}" style="font-size: 16px; font-family: Helvetica, Arial, sans-serif; color: #ffffff; text-decoration: none; border-radius: 3px; padding: 15px 25px; border: 1px solid #2196F3; display: inline-block; background-color: #2196F3;">前往員工服務系統</a>
+    <p style="font-size:12px; color:#888;">這是一封自動通知信，請勿直接回覆。</p>
+  `;
+  MailApp.sendEmail({
+    to: recipientEmail,
+    subject: subject,
+    htmlBody: htmlBody
+  });
+}
+
+function formatDateTime_(dateTimeString) {
+  if (!dateTimeString) return '';
+  try {
+    var d = new Date(dateTimeString);
+    var yyyy = d.getFullYear();
+    var mm = ('0' + (d.getMonth() + 1)).slice(-2);
+    var dd = ('0' + d.getDate()).slice(-2);
+    var hh = ('0' + d.getHours()).slice(-2);
+    var min = ('0' + d.getMinutes()).slice(-2);
+    return `${yyyy}.${mm}.${dd} ${hh}:${min}`;
+  } catch (e) {
+    return dateTimeString;
+  }
+}

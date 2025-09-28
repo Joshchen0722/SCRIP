@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <title>Royal Roi Hotel｜員工服務系統 (v1.1)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>
+    body { margin:0; font-family:"Microsoft JhengHei",Arial,sans-serif; background:linear-gradient(135deg,#2196F3,#6EC6FF ); color:#212121; }
+    .wrap { max-width:1080px; margin:0 auto; padding:24px; }
+    header { text-align:center; margin:20px 0 30px; color:#fff; }
+    h1 { margin:0; font-size:32px; font-weight:700; }
+    h2 { margin-top:0; color:#333; }
+    .card { background:rgba(255,255,255,0.95); border-radius:18px; box-shadow:0 8px 20px rgba(0,0,0,0.15); padding:24px; margin:18px auto; max-width:520px; }
+    input,button,select,textarea { width:100%; padding:12px; margin-top:8px; border:1px solid #ccc; border-radius:8px; font-family:inherit; box-sizing:border-box; }
+    button { background:linear-gradient(135deg,#2196F3,#1976D2); color:#fff; border:none; border-radius:25px; padding:12px; font-weight:600; cursor:pointer; transition:0.3s; }
+    button:hover { background:linear-gradient(135deg,#42A5F5,#1565C0); }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .menu { display:none; }
+    .menu .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:18px; }
+    .feature { background:#fff; border-radius:18px; box-shadow:0 6px 15px rgba(0,0,0,0.1); padding:22px; text-align:center; transition:transform 0.2s; }
+    .feature:hover { transform:translateY(-5px); }
+    .feature i { font-size:38px; border-radius:50%; padding:15px; color:#fff; margin-bottom:8px; display:inline-block; }
+    .feature:nth-child(1) i { background:#E91E63; }
+    .feature:nth-child(2) i { background:#FFC107; }
+    .feature:nth-child(3) i { background:#4CAF50; }
+    .feature:nth-child(4) i { background:#2196F3; }
+    .feature:nth-child(5) i { background:#FF5722; }
+    .feature:nth-child(6) i { background:#9C27B0; }
+    .feature:nth-child(7) i { background:#607D8B; }
+    .feature:nth-child(8) i { background:#00ACC1; }
+    .panel { display:none; margin-top:18px; }
+    .panel h3 { text-align:center; margin-top:0; margin-bottom:18px; font-size:22px; font-weight:700; padding-bottom:6px; border-bottom:3px solid #eee; }
+    #panel-approvalCenter h3 { border-bottom-color:#E91E63; }
+    label { display:block; margin-top:10px; font-weight:600; }
+    table { border-collapse:collapse; width:100%; }
+    th,td { border:1px solid #ccc; padding:8px; text-align:center; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header><h1>Royal Roi Hotel｜員工服務系統</h1></header>
+
+    <section id="loginSec" class="card">
+      <h2>登入</h2>
+      <input id="loginId" placeholder="員工編號">
+      <input id="loginPw" type="password" placeholder="密碼（4位數字）">
+      <button onclick="login()">登入</button>
+      <div id="loginMsg" style="color:#c00;margin-top:8px"></div>
+    </section>
+
+    <section id="menuSec" class="menu">
+      <div class="card" style="max-width:1080px">
+        <h2>歡迎，<span id="profName"></span></h2>
+        <div id="profMeta" style="color:#555; white-space: pre-wrap;"></div>
+      </div>
+      <div class="grid">
+        <div id="approvalCenterFeature" class="feature" style="display:none;">
+          <i class="fa-solid fa-pen-to-square"></i>
+          <h3>簽核中心</h3>
+          <button onclick="openPanel('approvalCenter')">進入簽核</button>
+        </div>
+        <div class="feature"><i class="fa-solid fa-calendar-days"></i><h3>調班申請</h3><button onclick="openPanel('schedule')">立即申請</button></div>
+        <div class="feature"><i class="fa-solid fa-umbrella-beach"></i><h3>請假申請</h3><button onclick="openPanel('leave')">立即申請</button></div>
+        <div class="feature"><i class="fa-solid fa-sun"></i><h3>特休補休申請</h3><button onclick="openPanel('vacation')">立即申請</button></div>
+        <div class="feature"><i class="fa-solid fa-house-chimney"></i><h3>房務獎金申請</h3><button onclick="openPanel('bonus')">立即申請</button></div>
+        <div class="feature"><i class="fa-solid fa-clock"></i><h3>加班申請</h3><button onclick="openPanel('overtime')">立即申請</button></div>
+        <div class="feature"><i class="fa-solid fa-id-card"></i><h3>補打卡申請</h3><button onclick="openPanel('clock')">立即申請</button></div>
+        <div class="feature"><i class="fa-solid fa-magnifying-glass"></i><h3>查詢紀錄</h3><button onclick="openPanel('query')">立即查詢</button></div>
+      </div>
+    </section>
+
+    <!-- 簽核中心 -->
+    <div id="panel-approvalCenter" class="panel card">
+      <h3>簽核中心</h3>
+      <div id="approvalTasksResult">載入中...</div>
+    </div>
+
+    <!-- 請假申請 -->
+    <div id="panel-leave" class="panel card">
+      <h3>請假申請</h3>
+      <form id="form-leave">
+        <label>假別 <select name="假別" required><option value="">請選擇</option><option>事假</option><option>病假</option><option>公假</option><option>喪假</option><option>婚假</option><option>產假/陪產假</option><option>支援權臺</option><option>其他</option></select></label>
+        <label>起始日期與時間<input type="datetime-local" name="起始日期與時間" required></label>
+        <label>結束日期與時間<input type="datetime-local" name="結束日期與時間" required></label>
+        <label>請假事由<input name="請假事由" required></label>
+        <label>職務代理人 <select name="職務代理人" required><option value="">請選擇</option><option>王彧疆</option><option>黃崑境</option><option>陳家興</option><option>徐志屹</option><option>江孟庭</option><option>蕭維宏</option><option>宋婕安</option><option>陳紅秀</option><option>林家楙</option><option>楊丞勛</option><option>徐奕翔</option><option>柯宗男</option><option>李維萍</option><option>王文一</option><option>許邦興</option><option>羅紹文</option><option>林奇緯</option><option>柳佳璋</option></select></label>
+        <button type="submit">送出</button>
+      </form>
+    </div>
+
+    <!-- 調班申請 -->
+    <div id="panel-schedule" class="panel card">
+      <h3>調班申請</h3>
+      <form id="form-schedule">
+        <label>原班別日期<input type="date" name="原班別日期" required></label>
+        <label>原班別 <select name="原班別" required><option value="">請選擇</option><option>早A 0600-1430</option><option>早B 0630-1500</option><option>早C 0700-1530</option><option>早F 0630-1200</option><option>早G 1000-1830</option><option>早H 1200-2030</option><option>早D 0800-1630</option><option>早E 0900-1730</option><option>中A 0900-1800</option><option>中B 1000-1900</option><option>中C 1200-2100</option><option>中D 0800-1700</option><option>中G 1300-2200</option><option>晚A 1130-2000</option><option>晚B 1500-2330</option><option>晚C 1700-0130</option><option>晚D 1400-2230</option><option>夜A 1800-0230</option><option>夜B 2300-0730</option></select></label>
+        <label>新班別日期<input type="date" name="新班別日期" required></label>
+        <label>新班別 <select name="新班別" required><option value="">請選擇</option><option>早A 0600-1430</option><option>早B 0630-1500</option><option>早C 0700-1530</option><option>早F 0630-1200</option><option>早G 1000-1830</option><option>早H 1200-2030</option><option>早D 0800-1630</option><option>早E 0900-1730</option><option>中A 0900-1800</option><option>中B 1000-1900</option><option>中C 1200-2100</option><option>中D 0800-1700</option><option>中G 1300-2200</option><option>晚A 1130-2000</option><option>晚B 1500-2330</option><option>晚C 1700-0130</option><option>晚D 1400-2230</option><option>夜A 1800-0230</option><option>夜B 2300-0730</option></select></label>
+        <label>調班事由<input name="調班事由" required></label>
+        <label>職務代理人 <select name="職務代理人" required><option value="">請選擇</option><option>王彧疆</option><option>黃崑境</option><option>陳家興</option><option>徐志屹</option><option>江孟庭</option><option>蕭維宏</option><option>宋婕安</option><option>陳紅秀</option><option>林家楙</option><option>楊丞勛</option><option>徐奕翔</option><option>柯宗男</option><option>李維萍</option><option>王文一</option><option>許邦興</option><option>羅紹文</option><option>林奇緯</option><option>柳佳璋</option></select></label>
+        <button type="submit">送出</button>
+      </form>
+    </div>
+
+    <!-- 特休補休申請 -->
+    <div id="panel-vacation" class="panel card">
+      <h3>特休補休申請</h3>
+      <form id="form-vacation">
+        <label>申請類型 <select name="申請類型" required><option value="">請選擇</option><option>特休</option><option>補休</option></select></label>
+        <label>開始日期時間<input type="datetime-local" name="開始日期時間" required></label>
+        <label>結束日期時間<input type="datetime-local" name="結束日期時間" required></label>
+        <label>申請時數<input type="number" step="0.5" min="0.5" name="申請時數" required></label>
+        <label>申請事由<input name="申請事由" required></label>
+        <label>職務代理人 <select name="職務代理人" required><option value="">請選擇</option><option>王彧疆</option><option>黃崑境</option><option>陳家興</option><option>徐志屹</option><option>江孟庭</option><option>蕭維宏</option><option>宋婕安</option><option>陳紅秀</option><option>林家楙</option><option>楊丞勛</option><option>徐奕翔</option><option>柯宗男</option><option>李維萍</option><option>王文一</option><option>許邦興</option><option>羅紹文</option><option>林奇緯</option><option>柳佳璋</option></select></label>
+        <button type="submit">送出</button>
+      </form>
+    </div>
+
+    <!-- 房務獎金申請 -->
+    <div id="panel-bonus" class="panel card">
+      <h3>房務獎金申請</h3>
+      <form id="form-bonus">
+        <label>掃房日期<input type="date" name="掃房日期" required></label>
+        <label>掃房間數<input type="number" name="掃房間數" min="0" required></label>
+        <label>掃房房號<input name="掃房房號" placeholder="例：601,602"></label>
+        <label>清潔間數<input type="number" name="清潔間數" min="0" required></label>
+        <label>清潔房號<input name="清潔房號" placeholder="例：701,702"></label>
+        <label>拆收間數<input type="number" name="拆收間數" min="0" required></label>
+        <label>拆收房號<input name="拆收房號" placeholder="例：801,802"></label>
+        <button type="submit">送出</button>
+      </form>
+    </div>
+
+    <!-- 加班申請 -->
+    <div id="panel-overtime" class="panel card">
+      <h3>加班申請</h3>
+      <form id="form-overtime">
+        <label>起始日期與時間<input type="datetime-local" name="起始日期與時間" required></label>
+        <label>結束日期與時間<input type="datetime-local" name="結束日期與時間" required></label>
+        <label>加班時數<input type="
